@@ -1,214 +1,186 @@
-/*
- * sensor_processor_node.cpp
- *
- *  Created on: Nov 25, 2024
- *      Author: Ikhyeon Cho
- *	 Institute: Korea Univ. ISR (Intelligent Systems & Robotics) Lab
- *       Email: tre0430@korea.ac.kr
- */
-
-#include "height_mapping/ros/sensor_processor_node.h"
-#include "height_mapping/ros/config.h"
+#include "height_mapping/ros/sensor_processor_node.hpp"
 
 #include <pcl_conversions/pcl_conversions.h>
+#include <pcl/PCLPointCloud2.h>
+#include <pcl/conversions.h>
+
+using std::placeholders::_1;
+using std::placeholders::_2;
+using std::placeholders::_3;
 
 namespace height_mapping_ros {
 
-SensorProcessorNode::SensorProcessorNode() : nh_("~") {
+SensorProcessorNode::SensorProcessorNode()
+: rclcpp::Node("sensor_processor_node")
+{
 
-  // Configs from sensor_processor_node.yaml
-  ros::NodeHandle cfg_node(nh_, "node");
-  ros::NodeHandle cfg_frame_id(nh_, "frame_id");
+  tf_ = std::make_unique<TransformOps>("transform_ops");  // arranca hilo + executor interno
 
-  // ROS node
-  SensorProcessorNode::loadConfig(cfg_node);
+  // Cargar parámetros
+  loadConfig();
+
+  // Cargar frame IDs desde parámetros (ROS 2)
+  frame_ids::loadFromConfig(*this);
+
+  // Pub/Sub
   initializePubSubs();
 
-  // TF frame IDs
-  frame_ids::loadFromConfig(cfg_frame_id);
-
-  std::cout << "\033[1;32m[height_mapping_ros::SensorProcessorNode]: "
-               "Sensor processor node initialized. Waiting for "
-            << cfg.inputcloud_topics.size() << " rgb clouds... \033[0m\n";
+  RCLCPP_INFO(this->get_logger(),
+    "\033[1;32m[SensorProcessorNode]: listo; esperando %zu nubes...\033[0m",
+    cfg.inputcloud_topics.size());
 }
 
-void SensorProcessorNode::loadConfig(const ros::NodeHandle &nh) {
+void SensorProcessorNode::loadConfig() {
+  cfg.inputcloud_topics = this->declare_parameter<std::vector<std::string>>(
+      "node.input_cloud_topics",
+      std::vector<std::string>{"/front/front_cam_depth_sensor/points", "/left/left_cam_depth_sensor/points", "/right/right_cam_depth_sensor/points"});
 
-  cfg.inputcloud_topics = nh.param<std::vector<std::string>>(
-      "input_cloud_topics",
-      {"/sensor1/points", "/sensor2/points", "/sensor3/points"});
-  cfg.outputcloud_topic =
-      nh.param<std::string>("outputcloud_topic", "/sensor_processor/points");
-  cfg.cloud_publish_rate = nh.param<double>("cloud_publish_rate", 10.0);      // [Hz]
-  cfg.downsample_resolution = nh.param<double>("downsample_resolution", 0.1); // [m/grid]
-  cfg.min_range_threshold = nh.param<double>("min_range_threshold", 0.3);     // [m]
-  cfg.max_range_threshold = nh.param<double>("max_range_threshold", 5.0);     // [m]
+  cfg.outputcloud_topic     = this->declare_parameter<std::string>("node.outputcloud_topic", "/sensor_processor/points");
+  cfg.cloud_publish_rate    = this->declare_parameter<double>("node.cloud_publish_rate", 10.0);
+  cfg.downsample_resolution = this->declare_parameter<double>("node.downsample_resolution", 0.1);
+  cfg.min_range_threshold   = this->declare_parameter<double>("node.min_range_threshold", 0.3);
+  cfg.max_range_threshold   = this->declare_parameter<double>("node.max_range_threshold", 5.0);
 }
 
 void SensorProcessorNode::initializePubSubs() {
+  auto qos = rclcpp::SensorDataQoS();
+  const rmw_qos_profile_t qos_profile = qos.get_rmw_qos_profile();
 
-  // Subscriber with synchronizer
-  auto queue_size = 10;
+  const int queue_size = 10;
+  sub_clouds_.reserve(cfg.inputcloud_topics.size());
+
+  // Usa el overload: Subscriber(NodeType* node, const std::string& topic, rmw_qos_profile_t qos)
   for (const auto &topic : cfg.inputcloud_topics) {
-    sub_clouds_.push_back(std::make_shared<CloudSubscriber>(nh_, topic, queue_size));
-  }
-  if (sub_clouds_.size() == 2) {
-    sync2_.reset(
-        new Synchronizer2(SyncPolicy2(queue_size), *sub_clouds_[0], *sub_clouds_[1]));
-    sync2_->registerCallback(
-        boost::bind(&SensorProcessorNode::syncCallback2, this, _1, _2));
-  } else if (sub_clouds_.size() == 3) {
-    sync3_.reset(new Synchronizer3(SyncPolicy3(queue_size),
-                                   *sub_clouds_[0],
-                                   *sub_clouds_[1],
-                                   *sub_clouds_[2]));
-    sync3_->registerCallback(
-        boost::bind(&SensorProcessorNode::syncCallback3, this, _1, _2, _3));
+    sub_clouds_.push_back(std::make_shared<CloudSubscriber>(
+        this,                    // <-- Node* (válido dentro del ctor)
+        topic,
+        qos_profile));
   }
 
-  // Publisher
+  if (sub_clouds_.size() == 2) {
+    sync2_ = std::make_shared<Synchronizer2>(
+        SyncPolicy2(queue_size), *sub_clouds_[0], *sub_clouds_[1]);
+    sync2_->registerCallback(std::bind(&SensorProcessorNode::syncCallback2, this, _1, _2));
+  } else if (sub_clouds_.size() == 3) {
+    sync3_ = std::make_shared<Synchronizer3>(
+        SyncPolicy3(queue_size), *sub_clouds_[0], *sub_clouds_[1], *sub_clouds_[2]);
+    sync3_->registerCallback(std::bind(&SensorProcessorNode::syncCallback3, this, _1, _2, _3));
+  } else {
+    RCLCPP_ERROR(this->get_logger(),
+      "Se requieren 2 o 3 tópicos; configurados: %zu", sub_clouds_.size());
+  }
+
   pub_cloud_processed_ =
-      nh_.advertise<sensor_msgs::PointCloud2>(cfg.outputcloud_topic, 1);
+      this->create_publisher<sensor_msgs::msg::PointCloud2>(
+          cfg.outputcloud_topic, rclcpp::SensorDataQoS());
 }
 
-void SensorProcessorNode::syncCallback2(const sensor_msgs::PointCloud2ConstPtr &msg1,
-                                        const sensor_msgs::PointCloud2ConstPtr &msg2) {
 
-  // Convert to PCL (be careful with const_cast)
-  pcl::moveFromROSMsg(*const_cast<sensor_msgs::PointCloud2 *>(msg1.get()), *cloud1_);
-  pcl::moveFromROSMsg(*const_cast<sensor_msgs::PointCloud2 *>(msg2.get()), *cloud2_);
+
+static inline void ros2ToPcl(const sensor_msgs::msg::PointCloud2 &msg,
+                             pcl::PointCloud<Color> &cloud_out)
+{
+  pcl::PCLPointCloud2 tmp;
+  pcl_conversions::toPCL(msg, tmp);
+  pcl::fromPCLPointCloud2(tmp, cloud_out);
+}
+
+void SensorProcessorNode::syncCallback2(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg1,
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg2) {
+
+  // ROS2 → PCL (vía toPCL + fromPCLPointCloud2)
+  ros2ToPcl(*msg1, *cloud1_);
+  ros2ToPcl(*msg2, *cloud2_);
 
   // Downsampling
-  downsampled1_ =
-      PointCloudOps::downsampleVoxel<Color>(cloud1_, cfg.downsample_resolution);
-  downsampled2_ =
-      PointCloudOps::downsampleVoxel<Color>(cloud2_, cfg.downsample_resolution);
+  downsampled1_ = PointCloudOps::downsampleVoxel<Color>(cloud1_, cfg.downsample_resolution);
+  downsampled2_ = PointCloudOps::downsampleVoxel<Color>(cloud2_, cfg.downsample_resolution);
 
-  // Free memory
-  cloud1_->clear();
-  cloud2_->clear();
+  cloud1_->clear(); cloud2_->clear();
 
-  // Transform each cloud to baselink frame
+  // Transformar a base_link
   transformToBaselink(downsampled1_, transformed1_, msg1->header.frame_id);
   transformToBaselink(downsampled2_, transformed2_, msg2->header.frame_id);
 
-  // Free memory
-  downsampled1_->clear();
-  downsampled2_->clear();
+  downsampled1_->clear(); downsampled2_->clear();
 
-  // Filter each cloud
-  filtered1_ = PointCloudOps::filterRange2D<Color>(transformed1_,
-                                                   cfg.min_range_threshold,
-                                                   cfg.max_range_threshold);
-  filtered2_ = PointCloudOps::filterRange2D<Color>(transformed2_,
-                                                   cfg.min_range_threshold,
-                                                   cfg.max_range_threshold);
+  // Filtro por rango 2D
+  filtered1_ = PointCloudOps::filterRange2D<Color>(transformed1_, cfg.min_range_threshold, cfg.max_range_threshold);
+  filtered2_ = PointCloudOps::filterRange2D<Color>(transformed2_, cfg.min_range_threshold, cfg.max_range_threshold);
 
-  // Free memory
-  transformed1_->clear();
-  transformed2_->clear();
+  transformed1_->clear(); transformed2_->clear();
 
-  // Merge transformed clouds
+  // Merge
   *filtered1_ += *filtered2_;
 
-  // Convert back to ROS message
-  sensor_msgs::PointCloud2 msg;
-  pcl::toROSMsg(*filtered1_, msg);
-  msg.header.frame_id = frame_ids::ROBOT_BASE;
-  msg.header.stamp = msg1->header.stamp; // Use timestamp from first message
-  pub_cloud_processed_.publish(msg);
+  // PCL → ROS2
+  sensor_msgs::msg::PointCloud2 out;
+  pcl::toROSMsg(*filtered1_, out);
+  out.header.frame_id = frame_ids::ROBOT_BASE;
+  out.header.stamp    = msg1->header.stamp;
+  pub_cloud_processed_->publish(out);
 
-  // Free memory
-  filtered1_->clear();
-  filtered2_->clear();
+  filtered1_->clear(); filtered2_->clear();
 }
 
-void SensorProcessorNode::syncCallback3(const sensor_msgs::PointCloud2ConstPtr &msg1,
-                                        const sensor_msgs::PointCloud2ConstPtr &msg2,
-                                        const sensor_msgs::PointCloud2ConstPtr &msg3) {
+void SensorProcessorNode::syncCallback3(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg1,
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg2,
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg3) {
 
-  // Convert to PCL (be careful with const_cast)
-  pcl::moveFromROSMsg(*const_cast<sensor_msgs::PointCloud2 *>(msg1.get()), *cloud1_);
-  pcl::moveFromROSMsg(*const_cast<sensor_msgs::PointCloud2 *>(msg2.get()), *cloud2_);
-  pcl::moveFromROSMsg(*const_cast<sensor_msgs::PointCloud2 *>(msg3.get()), *cloud3_);
+  ros2ToPcl(*msg1, *cloud1_);
+  ros2ToPcl(*msg2, *cloud2_);
+  ros2ToPcl(*msg3, *cloud3_);
 
-  // Downsampling
-  downsampled1_ =
-      PointCloudOps::downsampleVoxel<Color>(cloud1_, cfg.downsample_resolution);
-  downsampled2_ =
-      PointCloudOps::downsampleVoxel<Color>(cloud2_, cfg.downsample_resolution);
-  downsampled3_ =
-      PointCloudOps::downsampleVoxel<Color>(cloud3_, cfg.downsample_resolution);
+  downsampled1_ = PointCloudOps::downsampleVoxel<Color>(cloud1_, cfg.downsample_resolution);
+  downsampled2_ = PointCloudOps::downsampleVoxel<Color>(cloud2_, cfg.downsample_resolution);
+  downsampled3_ = PointCloudOps::downsampleVoxel<Color>(cloud3_, cfg.downsample_resolution);
 
-  // Free memory
-  cloud1_->clear();
-  cloud2_->clear();
-  cloud3_->clear();
+  cloud1_->clear(); cloud2_->clear(); cloud3_->clear();
 
-  // Transform each cloud to baselink frame
   transformToBaselink(downsampled1_, transformed1_, msg1->header.frame_id);
   transformToBaselink(downsampled2_, transformed2_, msg2->header.frame_id);
   transformToBaselink(downsampled3_, transformed3_, msg3->header.frame_id);
 
-  // Free memory
-  downsampled1_->clear();
-  downsampled2_->clear();
-  downsampled3_->clear();
+  downsampled1_->clear(); downsampled2_->clear(); downsampled3_->clear();
 
-  // Filter each cloud
-  filtered1_ = PointCloudOps::filterRange2D<Color>(transformed1_,
-                                                   cfg.min_range_threshold,
-                                                   cfg.max_range_threshold);
-  filtered2_ = PointCloudOps::filterRange2D<Color>(transformed2_,
-                                                   cfg.min_range_threshold,
-                                                   cfg.max_range_threshold);
-  filtered3_ = PointCloudOps::filterRange2D<Color>(transformed3_,
-                                                   cfg.min_range_threshold,
-                                                   cfg.max_range_threshold);
+  filtered1_ = PointCloudOps::filterRange2D<Color>(transformed1_, cfg.min_range_threshold, cfg.max_range_threshold);
+  filtered2_ = PointCloudOps::filterRange2D<Color>(transformed2_, cfg.min_range_threshold, cfg.max_range_threshold);
+  filtered3_ = PointCloudOps::filterRange2D<Color>(transformed3_, cfg.min_range_threshold, cfg.max_range_threshold);
 
-  // Free memory
-  transformed1_->clear();
-  transformed2_->clear();
-  transformed3_->clear();
+  transformed1_->clear(); transformed2_->clear(); transformed3_->clear();
 
-  // Merge transformed clouds
   *filtered1_ += *filtered2_;
   *filtered1_ += *filtered3_;
 
-  // Convert back to ROS message
-  sensor_msgs::PointCloud2 msg;
-  pcl::toROSMsg(*filtered1_, msg);
-  msg.header.frame_id = frame_ids::ROBOT_BASE;
-  msg.header.stamp = msg1->header.stamp;
-  pub_cloud_processed_.publish(msg);
+  sensor_msgs::msg::PointCloud2 out;
+  pcl::toROSMsg(*filtered1_, out);
+  out.header.frame_id = frame_ids::ROBOT_BASE;
+  out.header.stamp    = msg1->header.stamp;
+  pub_cloud_processed_->publish(out);
 
-  // Free memory
-  filtered1_->clear();
-  filtered2_->clear();
-  filtered3_->clear();
+  filtered1_->clear(); filtered2_->clear(); filtered3_->clear();
 }
 
 void SensorProcessorNode::transformToBaselink(
-    const pcl::PointCloud<Color>::Ptr &cloud,
-    pcl::PointCloud<Color>::Ptr &cloud_transformed,
+    const pcl::PointCloud<Color>::Ptr &cloud_in,
+    pcl::PointCloud<Color>::Ptr &cloud_out,
     const std::string &sensor_frame) {
 
-  // Get transform matrix
-  geometry_msgs::TransformStamped transform;
-  if (!tf_.lookupTransform(frame_ids::ROBOT_BASE, sensor_frame, transform))
+  geometry_msgs::msg::TransformStamped tf_s2b;
+  if (!tf_->lookupTransform(frame_ids::ROBOT_BASE, sensor_frame, tf_s2b))
     return;
 
-  // Transform point cloud
-  cloud_transformed = PointCloudOps::applyTransform<Color>(cloud, transform);
+  cloud_out = PointCloudOps::applyTransform<Color>(cloud_in, tf_s2b);
 }
 
 } // namespace height_mapping_ros
 
 int main(int argc, char **argv) {
-
-  ros::init(argc, argv, "sensor_processor_node");
-  height_mapping_ros::SensorProcessorNode node;
-  ros::spin();
-
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<height_mapping_ros::SensorProcessorNode>();
+  rclcpp::spin(node);
+  rclcpp::shutdown();
   return 0;
 }

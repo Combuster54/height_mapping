@@ -1,18 +1,53 @@
 <?xml version="1.0"?>
-<package format="2">
+<package format="3">
   <name>height_mapping</name>
   <version>0.0.0</version>
   <description>The height_mapping package</description>
+
   <maintainer email="tre0430@korea.ac.kr">Ikhyeon Cho</maintainer>
   <license>.</license>
 
-  <buildtool_depend>catkin</buildtool_depend>
-  <depend>roscpp</depend>
+  <!-- Build tools -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- ROS 2 interface generation (srv) -->
+  <build_depend>rosidl_default_generators</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <depend>std_msgs</depend>
+
+  <!-- Core runtime/build deps -->
+  <depend>rclcpp</depend>
   <depend>tf2_ros</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>visualization_msgs</depend>
+
+  <depend>tf2</depend>
+  <depend>tf2_eigen</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <!-- Grid map -->
+  <depend>grid_map_core</depend>
+  <depend>grid_map_msgs</depend>
   <depend>grid_map_ros</depend>
+
+  <!-- PCL bridge -->
   <depend>pcl_conversions</depend>
+
+  <!-- Sync filters (sensor_processor_node) -->
+  <depend>message_filters</depend>
+
+  <!-- Internos -->
   <depend>height_mapping_core</depend>
-  <!-- <depend>height_mapping_io</depend> -->
+
+  <!-- Guardado en rosbag2 y utilidades de índice -->
+  <depend>rosbag2_cpp</depend>
+  <depend>ament_index_cpp</depend>
+
+ <!-- 👇 Requisito cuando instalas interfaces -->
+  <member_of_group>rosidl_interface_packages</member_of_group>
+  
   <export>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>
