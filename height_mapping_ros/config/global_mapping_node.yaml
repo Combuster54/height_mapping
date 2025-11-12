@@ -1,21 +1,24 @@
-node:
-  lidar_topic: "/velodyne/points"
-  rgbd_topic: "/sensor_processor/points"
-  map_publish_rate: 2.0
-  remove_backward_points: true
-  debug_mode: false
-  map_save_format: "bag"      # ["pcd", "bag"]
+/**:
+  ros__parameters:
+    node:
+      lidar_topic: "/velodyne/points"
+      rgbd_topic: "/height_mapping/sensor_processor/points"
+      map_publish_rate: 2.0
+      remove_backward_points: true
+      debug_mode: false
+      map_save_format: "bag"       # "pcd" o "bag"
 
-frame_id:
-  robot: "base_link"
-  map: &map_frame "map"
+    frame_id:
+      robot: "base_link"
+      map:   "map"
 
-global_mapper:
-  estimator_type: "StatMean"  # ["StatMean", "KalmanFilter", "MovingAverage"]
-  frame_id: *map_frame
-  map_length_x: 200.0
-  map_length_y: 200.0
-  grid_resolution: 0.1
-  min_height_threshold: -0.2
-  max_height_threshold: 1.5
-  map_save_dir: "$(find height_mapping)/../maps/"
+    global_mapper:
+      estimator_type: "StatMean"   # "StatMean" | "KalmanFilter" | "MovingAverage"
+      frame_id: "map"
+      map_length_x: 60.0
+      map_length_y: 60.0
+      grid_resolution: 0.05
+      min_height_threshold: -0.2
+      max_height_threshold: 1.5
+      # OJO: no uses $(find ...) en YAML de ROS 2:
+      map_save_dir: "/root/slam_ws/maps"

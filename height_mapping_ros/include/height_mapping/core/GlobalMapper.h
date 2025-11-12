@@ -1,30 +1,20 @@
-/*
- * GlobalMapper.h
- *
- *  Created on: Dec 2, 2023
- *      Author: Ikhyeon Cho
- *	 Institute: Korea Univ. ISR (Intelligent Systems & Robotics) Lab
- *       Email: tre0430@korea.ac.kr
- */
-
 #pragma once
 
 #include "height_mapping/core/HeightMapper.h"
 #include <unordered_set>
 
-// this is for the use of unordered_set with grid_map::Index
+// hash y equal_to para grid_map::Index
 namespace std {
 template <> struct hash<grid_map::Index> {
-  std::size_t operator()(const grid_map::Index &index) const {
-    std::size_t h1 = std::hash<int>{}(index[0]);
-    std::size_t h2 = std::hash<int>{}(index[1]);
+  std::size_t operator()(const grid_map::Index &i) const {
+    std::size_t h1 = std::hash<int>{}(i[0]);
+    std::size_t h2 = std::hash<int>{}(i[1]);
     return h1 ^ (h2 << 1);
   }
 };
-
 template <> struct equal_to<grid_map::Index> {
-  bool operator()(const grid_map::Index &lhs, const grid_map::Index &rhs) const {
-    return (lhs[0] == rhs[0]) && (lhs[1] == rhs[1]);
+  bool operator()(const grid_map::Index &a, const grid_map::Index &b) const {
+    return (a[0] == b[0]) && (a[1] == b[1]);
   }
 };
 } // namespace std
@@ -40,8 +30,12 @@ public:
   GlobalMapper(const Config &cfg);
 
   template <typename PointT>
-  typename boost::shared_ptr<pcl::PointCloud<PointT>>
-  heightMapping(const typename boost::shared_ptr<pcl::PointCloud<PointT>> &cloud);
+  using Cloud = pcl::PointCloud<PointT>;
+  template <typename PointT>
+  using CloudPtr = typename Cloud<PointT>::Ptr;
+
+  template <typename PointT>
+  CloudPtr<PointT> heightMapping(const CloudPtr<PointT> &cloud);
 
   const std::unordered_set<grid_map::Index> &getMeasuredGridIndices() const {
     return measured_indices_;
@@ -54,4 +48,5 @@ private:
 
   std::unordered_set<grid_map::Index> measured_indices_;
 };
+
 } // namespace height_mapping

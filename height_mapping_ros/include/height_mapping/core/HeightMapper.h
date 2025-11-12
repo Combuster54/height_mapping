@@ -1,15 +1,10 @@
-/*
- * HeightMapper.h
- *
- *  Created on: Aug 17, 2023
- *      Author: Ikhyeon Cho
- *	 Institute: Korea Univ. ISR (Intelligent Systems & Robotics) Lab
- *       Email: tre0430@korea.ac.kr
- */
-
 #pragma once
 
-// Height Map
+#include <memory>
+#include <unordered_map>
+#include <cmath>
+
+// Height Map (trae GridMap y tu core)
 #include <height_mapping_core/height_mapping_core.h>
 
 namespace height_mapping {
@@ -28,56 +23,40 @@ public:
 
   HeightMapper(const Config &cfg);
 
+  // Aliases cómodos
+  template <typename PointT>
+  using Cloud = pcl::PointCloud<PointT>;
+  template <typename PointT>
+  using CloudPtr = typename Cloud<PointT>::Ptr;
+
   /**
    * @brief Gridded height mapping using height estimator
    * @param cloud: input pointcloud
-   * @return filtered pointcloud
+   * @return filtered pointcloud (rasterizada)
    */
   template <typename PointT>
-  typename boost::shared_ptr<pcl::PointCloud<PointT>>
-  heightMapping(const typename boost::shared_ptr<pcl::PointCloud<PointT>> &cloud);
+  CloudPtr<PointT> heightMapping(const CloudPtr<PointT> &cloud);
 
   /*
-   * Correct heightmap using raycasting
-   * @param pointcloud: pointcloud for raycasting [ref: map frame]
-   * @param sensorOrigin: sensor origin [ref: map frame]
+   * @brief Corrige el height map con raycasting (sensor→punto)
    */
   template <typename PointT>
   void raycasting(const Eigen::Vector3f &sensorOrigin,
-                  const typename boost::shared_ptr<pcl::PointCloud<PointT>> &cloud);
+                  const CloudPtr<PointT> &cloud);
 
   /**
-   * @brief Fast height filtering
-   * @param cloud: input pointcloud
-   * @param filtered_cloud: output filtered pointcloud
+   * @brief Filtro rápido por altura
    */
   template <typename PointT>
-  void
-  fastHeightFilter(const typename boost::shared_ptr<pcl::PointCloud<PointT>> &cloud,
-                   typename boost::shared_ptr<pcl::PointCloud<PointT>> &filtered_cloud);
+  void fastHeightFilter(const CloudPtr<PointT> &cloud,
+                        CloudPtr<PointT> &filtered_cloud);
 
-  /**
-   * @brief Move heightmap origin
-   * @param position: new origin position in map frame
-   */
   void moveMapOrigin(const grid_map::Position &position);
 
-  /**
-   * @brief Get heightmap
-   * @return heightmap
-   */
   const HeightMap &getHeightMap() const { return map_; }
   HeightMap &getHeightMap() { return map_; }
 
-  /**
-   * @brief Set heightmap origin
-   * @param position: new origin position in map frame
-   */
   void setMapPosition(const grid_map::Position &position) { map_.setPosition(position); }
-
-  /**
-   * @brief Clear heightmap
-   */
   void clearMap() { map_.clearAll(); }
 
 private:
@@ -85,12 +64,10 @@ private:
   void initHeightEstimator();
 
   template <typename PointT>
-  typename pcl::PointCloud<PointT>::Ptr
-  cloudRasterization(const typename pcl::PointCloud<PointT>::Ptr &cloud, float gridSize);
+  CloudPtr<PointT> cloudRasterization(const CloudPtr<PointT> &cloud, float gridSize);
+
   template <typename PointT>
-  typename pcl::PointCloud<PointT>::Ptr
-  cloudRasterizationAlt(const typename pcl::PointCloud<PointT>::Ptr &cloud,
-                        float gridSize);
+  CloudPtr<PointT> cloudRasterizationAlt(const CloudPtr<PointT> &cloud, float gridSize);
 
   struct pair_hash {
     template <class T1, class T2>
@@ -109,4 +86,5 @@ private:
   HeightEstimatorBase::Ptr height_estimator_;
   HeightMapRaycaster raycaster_;
 };
+
 } // namespace height_mapping

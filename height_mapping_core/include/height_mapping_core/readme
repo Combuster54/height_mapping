@@ -1,0 +1,14 @@
+
+
+height_correctors: Cuando un LiDAR/cámara mide puntos, puede haber “oclusiones” y alturas sobreestimadas en el mapa. Este raycaster recorre los rayos desde el sensor hasta cada punto medido y recorta alturas del mapa por donde el rayo pasa “libre”, evitando borrar obstáculos estáticos reales.
+
+height_estimators: Fusión de medidas por celda
+
+- KalmanEstimator: altura + varianza vía update de Kalman.
+- MovingAverageEstimator: EMA rápida sin varianza.
+- StatMeanEstimator: media/varianza incremental + SE/IC.
+
+Actualizan elevation, min/max, contadores y (si aplica) intensidad/color.
+
+
+height_filters: Pequeño filtro “pass-through” en Z para nubes PCL. Elimina puntos fuera de [minZ, maxZ]. Genérico para cualquier PointT con campo .z.
